@@ -259,6 +259,35 @@ export async function parseRenderFlags(args: string[]) {
         flags.useFreezer = true;
         break;
 
+      case "--jobs":
+      case "-j":
+        arg = argsStack.shift();
+        flags.jobs = parseInt(arg!, 10);
+        if (isNaN(flags.jobs)) {
+          delete flags.jobs;
+        }
+        break;
+
+      case "--keep-going":
+        arg = argsStack.shift();
+        flags.keepGoing = true;
+        break;
+
+      case "--incremental":
+        arg = argsStack.shift();
+        flags.incremental = true;
+        break;
+
+      case "--retry-failed":
+        arg = argsStack.shift();
+        flags.retryFailed = true;
+        break;
+
+      case "--no-scripts":
+        arg = argsStack.shift();
+        flags.noScripts = true;
+        break;
+
       case "--cache":
         arg = argsStack.shift();
         flags.executeCache = true;
@@ -430,6 +459,12 @@ export function fixupPandocArgs(pandocArgs: string[], flags: RenderFlags) {
   removeArgs.set("--execute-daemon-restart", false);
   removeArgs.set("--execute-debug", false);
   removeArgs.set("--use-freezer", false);
+  removeArgs.set("--jobs", true);
+  removeArgs.set("-j", true);
+  removeArgs.set("--keep-going", false);
+  removeArgs.set("--incremental", false);
+  removeArgs.set("--retry-failed", false);
+  removeArgs.set("--no-scripts", false);
   removeArgs.set("--cache", false);
   removeArgs.set("--no-cache", false);
   removeArgs.set("--cache-refresh", false);

@@ -138,6 +138,9 @@ export interface RenderedFile {
 export interface RenderExecuteOptions {
   resolveDependencies?: boolean;
   alwaysExecute?: boolean;
+  // don't execute: use frozen results (even if stale) if there are any,
+  // otherwise render the code without outputs (for --keep-going)
+  skipExecute?: boolean;
 }
 
 export interface ExecutedFile {
@@ -247,6 +250,11 @@ export interface RenderFlags extends PandocFlags {
   executeDaemonRestart?: boolean;
   executeDebug?: boolean;
   useFreezer?: boolean;
+  jobs?: number;
+  keepGoing?: boolean;
+  incremental?: boolean;
+  retryFailed?: boolean;
+  noScripts?: boolean;
   metadata?: { [key: string]: unknown };
   pandocMetadata?: { [key: string]: unknown };
   params?: { [key: string]: unknown };

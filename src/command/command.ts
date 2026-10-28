@@ -22,6 +22,7 @@ import { installCommand } from "./install/cmd.ts";
 import { updateCommand } from "./update/cmd.ts";
 import { publishCommand } from "./publish/cmd.ts";
 import { removeCommand } from "./remove/cmd.ts";
+import { cleanCommand } from "./clean/cmd.ts";
 import { listCommand } from "./list/cmd.ts";
 import { makeUseCommand } from "./use/cmd.ts";
 import { addCommand } from "./add/cmd.ts";
@@ -43,6 +44,7 @@ export function commands(): Command<any>[] {
     addCommand,
     updateCommand,
     removeCommand,
+    cleanCommand,
     createProjectCommand,
     convertCommand,
     pandocCommand,

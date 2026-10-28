@@ -415,6 +415,7 @@ export async function websiteNavigationExtras(
           source,
           markdownPipeline,
           format.language,
+          crumbs,
         ),
       ],
       [kMarkdownAfterBody]: [
@@ -455,6 +456,9 @@ function navigationHtmlPostprocessor(
   source: string,
   markdownPipeline: MarkdownPipeline,
   language: FormatLanguage,
+  // this page's crumbs (navigation.breadCrumbs may belong to another page by
+  // the time this runs, if pages render concurrently)
+  breadCrumbs: SidebarItem[],
 ) {
   const sourceRelative = relative(project.dir, source);
   const href = inputFileHref(sourceRelative);
@@ -473,7 +477,7 @@ function navigationHtmlPostprocessor(
     );
     if (secondaryNavTitleEl) {
       if (showBreadCrumbs) {
-        const navEl = makeBreadCrumbs(doc, language);
+        const navEl = makeBreadCrumbs(doc, language, breadCrumbs);
         if (secondaryNavTitleEl.parentElement) {
           secondaryNavTitleEl.parentElement.replaceChild(
             navEl,
@@ -504,10 +508,11 @@ function navigationHtmlPostprocessor(
 
     const titleBlockEl = doc.querySelector(".quarto-title-block");
     if (showBreadCrumbs && titleBlockEl) {
-      if (navigation.breadCrumbs && navigation.breadCrumbs.length > 1) {
+      if (breadCrumbs.length > 1) {
         const titleBreadCrumbEl = makeBreadCrumbs(
           doc,
           language,
+          breadCrumbs,
           ["quarto-title-breadcrumbs", "d-none", "d-lg-block"],
         );
         // See if there is deeper target
@@ -912,6 +917,7 @@ async function resolveFooter(
 function makeBreadCrumbs(
   doc: Document,
   language: FormatLanguage,
+  breadCrumbs: SidebarItem[],
   clz?: string[],
 ) {
   // Make bootstrap breadcrumbs
@@ -937,8 +943,8 @@ function makeBreadCrumbs(
     return liEl;
   };
 
-  if (navigation.breadCrumbs && navigation.breadCrumbs.length > 0) {
-    for (const item of navigation.breadCrumbs) {
+  if (breadCrumbs.length > 0) {
+    for (const item of breadCrumbs) {
       if (item.text || item.icon) {
         const liEl = breadCrumbEl();
         const maybeLink = (liEl: Element, contents: Element | string) => {

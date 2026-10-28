@@ -50,7 +50,9 @@ export interface NavigationPipelineContext {
   announcement?: NavigationAnnouncement;
 }
 
-export function navigationMarkdownHandlers(context: NavigationPipelineContext) {
+export function navigationMarkdownHandlers(
+  context: NavigationPipelineContext,
+): MarkdownPipelineHandler[] {
   return [
     sidebarTitleHandler(context),
     navbarTitleHandler(context),
@@ -64,7 +66,33 @@ export function navigationMarkdownHandlers(context: NavigationPipelineContext) {
     bodyHeaderFooterHandler(context),
     breadCrumbHandler(context),
     announcementHandler(context),
-  ];
+  ].map(skipPlainTextInlines);
+}
+
+// Labels that are plain text render to themselves, so sending them through
+// pandoc (and then splicing each rendered copy back into the DOM of every
+// page, which is O(pages) work per page) can be skipped
+const kPlainTextLabel = /^[\p{L}\p{N}][\p{L}\p{N} ,.;:()/?+=%]*$/u;
+
+function skipPlainTextInlines(
+  handler: MarkdownPipelineHandler,
+): MarkdownPipelineHandler {
+  return {
+    getUnrendered() {
+      const unrendered = handler.getUnrendered();
+      if (unrendered?.inlines) {
+        const inlines: Record<string, string> = {};
+        for (const [key, value] of Object.entries(unrendered.inlines)) {
+          if (!kPlainTextLabel.test(value) || value.endsWith(" ")) {
+            inlines[key] = value;
+          }
+        }
+        return { ...unrendered, inlines };
+      }
+      return unrendered;
+    },
+    processRendered: handler.processRendered,
+  };
 }
 
 function title(format: Format) {

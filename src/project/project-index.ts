@@ -44,12 +44,35 @@ import { withRenderServices } from "../command/render/render-services.ts";
 import { RenderServices } from "../command/render/types.ts";
 import { kDraft } from "../format/html/format-html-shared.ts";
 
+// Results of inputTargetIndex, by input file. Navigation resolves every
+// sidebar/navbar link through here for every rendered page (a few stats and
+// a scan of the project's input list each), so a render memoizes them; sources
+// don't change during a render, and the memo is cleared at the start of each.
+const inputTargetIndexMemo = new Map<string, InputTargetIndex | undefined>();
+
+export function clearInputTargetIndexMemo() {
+  inputTargetIndexMemo.clear();
+}
+
 export async function inputTargetIndex(
   project: ProjectContext,
   input: string,
 ): Promise<InputTargetIndex | undefined> {
   // calculate input file
   const inputFile = join(project.dir, input);
+  if (inputTargetIndexMemo.has(inputFile)) {
+    return inputTargetIndexMemo.get(inputFile);
+  }
+  const index = await inputTargetIndexUncached(project, input, inputFile);
+  inputTargetIndexMemo.set(inputFile, index);
+  return index;
+}
+
+async function inputTargetIndexUncached(
+  project: ProjectContext,
+  input: string,
+  inputFile: string,
+): Promise<InputTargetIndex | undefined> {
 
   // return undefined if the file doesn't exist
   if (!safeExistsSync(inputFile) || Deno.statSync(inputFile).isDirectory) {
@@ -363,6 +386,7 @@ export async function resolveInputTargetForOutputFile(
 }
 
 export function clearProjectIndex(projectDir: string) {
+  clearInputTargetIndexMemo();
   const indexPath = projectScratchPath(projectDir, "idx");
   removeIfExists(indexPath);
 }

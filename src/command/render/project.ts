@@ -79,6 +79,10 @@ import { fileExecutionEngine } from "../../execute/engine.ts";
 import { projectContextForDirectory } from "../../project/project-context.ts";
 import { ProjectType } from "../../project/types/types.ts";
 import { RunHandlerOptions } from "../../core/run/types.ts";
+import {
+  changedProjectFiles,
+  recordRenderedFiles,
+} from "./render-incremental.ts";
 
 const noMutationValidations = (
   projType: ProjectType,
@@ -181,8 +185,26 @@ const computeProjectRenderConfig = async (
     inputs.options = { ...inputs.options, useFreezer: true };
   }
 
+  // with --incremental, a full render only renders what changed since the
+  // last one (it's still a full render as far as scripts are concerned)
+  let changedOnly = false;
+  if (!inputs.files && inputs.options.flags?.incremental) {
+    const changed = changedProjectFiles(
+      inputs.context,
+      inputs.context.files.input,
+      inputs.options.flags,
+    );
+    if (changed) {
+      inputs.files = changed;
+      changedOnly = true;
+      info(
+        `Incremental render: ${changed.length} of ${inputs.context.files.input.length} file(s) changed`,
+      );
+    }
+  }
+
   // some standard pre and post render script env vars
-  const renderAll = !inputs.files ||
+  const renderAll = changedOnly || !inputs.files ||
     (inputs.files.length === inputs.context.files.input.length);
 
   // default for files if not specified
@@ -201,7 +223,7 @@ const computeProjectRenderConfig = async (
       return inputs.projType.supplementRender(
         inputs.context,
         filesToRender,
-        incremental,
+        incremental || changedOnly,
       );
     } else {
       return { files: [] };
@@ -217,16 +239,20 @@ const computeProjectRenderConfig = async (
     supplements,
     behavior: {
       renderAll,
-      incremental,
+      incremental: incremental || changedOnly,
     },
   };
 };
 
 const getProjectRenderScripts = async (
   context: ProjectContext,
+  options: RenderOptions,
 ) => {
   const preRenderScripts: string[] = [],
     postRenderScripts: string[] = [];
+  if (options.flags?.noScripts) {
+    return { preRenderScripts, postRenderScripts };
+  }
   if (context.config?.project?.[kProjectPreRender]) {
     preRenderScripts.push(
       ...asArray(context.config?.project?.[kProjectPreRender]!),
@@ -247,6 +273,7 @@ export async function renderProject(
 ): Promise<RenderResult> {
   const { preRenderScripts, postRenderScripts } = await getProjectRenderScripts(
     context,
+    pOptions,
   );
 
   // lookup the project type
@@ -276,6 +303,7 @@ export async function renderProject(
   // if there is an output dir then remove it if clean is specified
   if (
     projectRenderConfig.behavior.renderAll && hasProjectOutputDir(context) &&
+    !projectRenderConfig.options.flags?.incremental &&
     (projectRenderConfig.options.forceClean ||
       (projectRenderConfig.options.flags?.clean == true) &&
         (projType.cleanOutputDir === true))
@@ -825,6 +853,16 @@ export async function renderProject(
         projectRenderConfig.behavior.incremental,
         outputFiles,
         moveOutputResult,
+      );
+    }
+
+    // note what was rendered for the next --incremental render
+    if (projectRenderConfig.behavior.renderAll) {
+      recordRenderedFiles(
+        context,
+        outputFiles,
+        projectRenderConfig.options.flags,
+        !projectRenderConfig.behavior.incremental,
       );
     }
 

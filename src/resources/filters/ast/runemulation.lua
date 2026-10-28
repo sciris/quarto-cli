@@ -49,7 +49,9 @@ end
 
 local function run_emulated_filter_chain(doc, filters, afterFilterPass, profiling)
   init_trace(doc)
+  local filter_times = os.getenv("QUARTO_FILTER_TIMES")
   for i, v in ipairs(filters) do
+    local filter_start = filter_times and os.clock()
     local function callback()
       if v.flags then
         if type(v.flags) ~= "table" then
@@ -101,6 +103,12 @@ local function run_emulated_filter_chain(doc, filters, afterFilterPass, profilin
     end
     if afterFilterPass then
       afterFilterPass()
+    end
+    if filter_times then
+      local elapsed = os.clock() - filter_start
+      if elapsed > 0.01 then
+        io.stderr:write(string.format("[filter-time] %6.0f ms %s\n", elapsed * 1000, v.name or "?"))
+      end
     end
   end
   end_trace()

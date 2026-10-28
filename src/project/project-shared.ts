@@ -136,6 +136,16 @@ export function projectOffset(context: ProjectContext, input: string) {
   return pathWithForwardSlashes(offset);
 }
 
+// Whether each path exists, shared across calls: this runs over the whole
+// project config (navigation included) for every rendered file, so without it
+// a render stats every string in the config once per file. Cleared at the
+// start of each render.
+const projectPathExistsCache = new Map<string, boolean>();
+
+export function clearInputRelativePathsCache() {
+  projectPathExistsCache.clear();
+}
+
 export function toInputRelativePaths(
   type: ProjectType,
   baseDir: string,
@@ -148,20 +158,28 @@ export function toInputRelativePaths(
     ignoreFieldsForProjectType(type) || [];
   const offset = relative(inputDir, baseDir);
 
+  const pathExists = (projectPath: string) => {
+    let exists = projectPathExistsCache.get(projectPath);
+    if (exists === undefined) {
+      try {
+        exists = existsSync(projectPath);
+      } catch {
+        exists = false;
+      }
+      projectPathExistsCache.set(projectPath, exists);
+    }
+    return exists;
+  };
+
   const fixup = (value: string) => {
     // if this is a valid file, then transform it to be relative to the input path
     if (!existsCache.has(value)) {
-      const projectPath = join(baseDir, value);
-      try {
-        if (existsSync(projectPath)) {
-          existsCache.set(
-            value,
-            pathWithForwardSlashes(join(offset!, value)),
-          );
-        } else {
-          existsCache.set(value, value);
-        }
-      } catch {
+      if (pathExists(join(baseDir, value))) {
+        existsCache.set(
+          value,
+          pathWithForwardSlashes(join(offset!, value)),
+        );
+      } else {
         existsCache.set(value, value);
       }
     }

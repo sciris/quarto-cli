@@ -81,6 +81,26 @@ export const renderCommand = new Command()
     "Force use of frozen computations for an incremental file render.",
   )
   .option(
+    "-j, --jobs",
+    "Execute and render up to N project files in parallel.",
+  )
+  .option(
+    "--keep-going",
+    "Keep rendering the project if a file fails (failed files render without execution).",
+  )
+  .option(
+    "--incremental",
+    "For a project, only render files changed since the last render (or with missing output).",
+  )
+  .option(
+    "--retry-failed",
+    "With --keep-going, execute again the unchanged files that failed in a previous render (which are otherwise skipped).",
+  )
+  .option(
+    "--no-scripts",
+    "For a project, don't run its pre-render and post-render scripts.",
+  )
+  .option(
     "--cache",
     "Cache execution output (--no-cache to prevent cache).",
   )
@@ -134,6 +154,13 @@ export const renderCommand = new Command()
       throw new InternalError("Expected `options` to be an object");
     }
     delete options.clean;
+
+    // likewise for --no-scripts (cliffy turns it into an implicit `scripts`
+    // option, which would be mis-reshuffled into a pandoc arg below)
+    if (options.scripts === false) {
+      args.unshift("--no-scripts");
+    }
+    delete options.scripts;
 
     // if an option got defined then this was mis-parsed as an 'option'
     // rather than an 'arg' because no input was passed. reshuffle

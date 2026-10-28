@@ -38,7 +38,7 @@ import { kSassBundles } from "../../config/types.ts";
 import { md5HashBytes } from "../../core/hash.ts";
 import { InternalError } from "../../core/lib/error.ts";
 import { assert } from "testing/asserts";
-import { safeModeFromFile } from "../../deno_ral/fs.ts";
+import { existsSync, safeModeFromFile } from "../../deno_ral/fs.ts";
 import { safeCloneDeep } from "../../core/safe-clone-deep.ts";
 
 // The output target for a sass bundle
@@ -198,18 +198,13 @@ export async function resolveSassBundles(
     }
 
     for (const target of targets) {
-      let cssPath: string | undefined;
-      cssPath = await compileSass(target.bundles, project);
-      // First, Clean CSS
-      cleanSourceMappingUrl(cssPath);
-      // look for a sentinel 'dark' value, extract variables
-      const cssResult = await processCssIntoExtras(cssPath, extras, project);
-      cssPath = cssResult.path;
+      const cssResult = await compileTargetCss(target.bundles, extras, project);
+      const cssPath = cssResult.path;
 
       // it can happen that processing generate an empty css file (e.g quarto-html deps with Quarto CSS variables)
       // in that case, no need to insert the cssPath in the dependency
       if (!cssPath) continue;
-      if (Deno.readTextFileSync(cssPath).length === 0) {
+      if (cssResult.css.length === 0) {
         continue;
       }
 
@@ -227,7 +222,7 @@ export async function resolveSassBundles(
 
       // Find any imported stylesheets or url references
       // (These could come from user scss that is merged into our theme, for example)
-      const css = Deno.readTextFileSync(cssPath);
+      const css = cssResult.css;
       const toDependencies = (paths: string[]) => {
         return paths.map((path) => {
           return {
@@ -250,9 +245,7 @@ export async function resolveSassBundles(
 
         let targetName = target.name;
         if (target.attribs["append-hash"] === "true") {
-          const hashFragment = `-${await md5HashBytes(
-            Deno.readFileSync(cssPath),
-          )}`;
+          const hashFragment = `-${cssResult.hash}`;
           let extension = "";
           if (target.name.endsWith(".min.css")) {
             extension = ".min.css";
@@ -589,6 +582,57 @@ function generateThemeCssClasses(
 interface CSSResult {
   path: string | undefined;
   dark: boolean;
+}
+
+interface CompiledTargetCss {
+  path: string | undefined;
+  dark: boolean;
+  variables: string[];
+  css: string;
+  hash: string;
+}
+
+// Every page of a project compiles the same theme bundles, and even with the
+// sass cache, assembling, hashing and post-processing that css costs ~50ms a
+// page, so the processed result is kept for the rest of the process (its files
+// live in the project's temp dir or the sass cache)
+const compiledTargetCssCache = new Map<string, CompiledTargetCss>();
+
+async function compileTargetCss(
+  bundles: SassBundle[],
+  extras: FormatExtras,
+  project: ProjectContext,
+): Promise<CSSResult & { css: string; hash: string }> {
+  const key = JSON.stringify([project.dir, bundles]);
+  let compiled = compiledTargetCssCache.get(key);
+  if (compiled === undefined || (compiled.path && !existsSync(compiled.path))) {
+    const cssPath = await compileSass(bundles, project);
+    // First, Clean CSS
+    cleanSourceMappingUrl(cssPath);
+    // look for a sentinel 'dark' value, extract variables
+    const processExtras: FormatExtras = {};
+    const result = await processCssIntoExtras(cssPath, processExtras, project);
+    const css = result.path ? Deno.readTextFileSync(result.path) : "";
+    compiled = {
+      path: result.path,
+      dark: result.dark,
+      variables: processExtras.html?.[kQuartoCssVariables] || [],
+      css,
+      hash: result.path ? await md5HashBytes(Deno.readFileSync(result.path)) : "",
+    };
+    compiledTargetCssCache.set(key, compiled);
+  }
+
+  // apply the effects processCssIntoExtras has on extras
+  extras.html = extras.html || {};
+  if (!extras.html[kTextHighlightingMode] && compiled.dark) {
+    setTextHighlightStyle("dark", extras);
+  }
+  extras.html[kQuartoCssVariables] = uniqBy(
+    [...(extras.html[kQuartoCssVariables] || []), ...compiled.variables],
+    (val: string) => val,
+  );
+  return compiled;
 }
 
 // Processes CSS into format extras (scanning for variables and removing them)
