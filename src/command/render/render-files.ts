@@ -49,6 +49,8 @@ import { outputRecipe } from "./output.ts";
 import { renderPandoc } from "./render.ts";
 import { PandocRenderCompletion, RenderServices } from "./types.ts";
 import { renderContexts } from "./render-contexts.ts";
+import { existsSync, safeRemoveDirSync } from "../../deno_ral/fs.ts";
+import { clearInputTargetIndexMemo } from "../../project/project-index.ts";
 import { renderProgress } from "./render-info.ts";
 import {
   ExecutedFile,
@@ -86,6 +88,10 @@ import {
   copyFromProjectFreezer,
   copyToProjectFreezer,
   defrostExecuteResult,
+  frozenResultIsCurrent,
+  readExecuteFailures,
+  sourceFreezeHash,
+  writeExecuteFailures,
   freezeExecuteResult,
   freezerFigsDir,
   freezerFreezeFile,
@@ -111,6 +117,7 @@ import { satisfies } from "semver/mod.ts";
 import { quartoConfig } from "../../core/quarto.ts";
 import { ensureNotebookContext } from "../../core/jupyter/jupyter-embed.ts";
 import {
+  clearInputRelativePathsCache,
   projectIsWebsite,
   projectOutputDir,
 } from "../../project/project-shared.ts";
@@ -145,7 +152,11 @@ export async function renderExecute(
   }
 
   // alias options
-  const { resolveDependencies = true, alwaysExecute = false } = options;
+  const {
+    resolveDependencies = true,
+    alwaysExecute = false,
+    skipExecute = false,
+  } = options;
 
   // alias flags
   const flags = context.options.flags || {};
@@ -164,15 +175,18 @@ export async function renderExecute(
   }
 
   // are we eligible to freeze?
-  const canFreeze = context.engine.canFreeze &&
+  let canFreeze = context.engine.canFreeze &&
     (context.format.execute[kExecuteEnabled] !== false);
 
   // use previous frozen results if they are available
-  if (context.project && !context.project.isSingleFile && !alwaysExecute) {
-    // check if we are using the freezer
-
+  if (
+    context.project && !context.project.isSingleFile &&
+    (!alwaysExecute || skipExecute)
+  ) {
+    // check if we are using the freezer (skipExecute takes whatever
+    // frozen results there are, even if they are out of date)
     const thaw = canFreeze &&
-      (context.format.execute[kFreeze] ||
+      (skipExecute || context.format.execute[kFreeze] ||
         (context.options.useFreezer ? "auto" : false));
 
     if (thaw) {
@@ -214,6 +228,13 @@ export async function renderExecute(
     }
   }
 
+  // no frozen results to fall back on, so render without executing (and don't
+  // let the output-less result replace anything in the freezer)
+  if (skipExecute) {
+    context.format.execute[kExecuteEnabled] = false;
+    canFreeze = false;
+  }
+
   // calculate figsDir
   const figsDir = join(filesDir, figuresDir(context.format.pandoc.to));
 
@@ -236,8 +257,12 @@ export async function renderExecute(
   };
   // execute computations
   setExecuteEnvironment(executeOptions);
-  const executeResult = await context.engine.execute(executeOptions);
-  popTiming();
+  let executeResult: ExecuteResult;
+  try {
+    executeResult = await context.engine.execute(executeOptions);
+  } finally {
+    popTiming();
+  }
 
   // write the freeze file if we are in a project
   if (context.project && !context.project.isSingleFile && canFreeze) {
@@ -295,6 +320,12 @@ export async function renderFiles(
   pandocRenderer: PandocRenderer | undefined,
   project: ProjectContext,
 ): Promise<RenderFilesResult> {
+  // project types with their own renderer (e.g. books) render serially
+  const customRenderer = !!pandocRenderer;
+
+  clearInputRelativePathsCache();
+  clearInputTargetIndexMemo();
+
   // provide default renderer
   pandocRenderer = pandocRenderer || defaultPandocRenderer(options, project);
 
@@ -314,6 +345,47 @@ export async function renderFiles(
 
     // calculate num width
     const numWidth = String(files.length).length;
+
+    // with --keep-going, a file that fails is reported and skipped (and
+    // rendered again without execution) rather than ending the render
+    const keepGoing = !!options.flags?.keepGoing;
+    const failures: RenderFileFailure[] = [];
+
+    // with --jobs, execute the files that need it in parallel first: the
+    // results go to the freezer, so the render loop below just thaws them
+    const jobs = options.flags?.jobs || 1;
+    if (jobs > 1 && files.length > 1 && !project.isSingleFile) {
+      failures.push(
+        ...await executeFilesInParallel(
+          files,
+          options,
+          project,
+          notebookContext,
+          alwaysExecuteFiles,
+          jobs,
+          keepGoing,
+        ),
+      );
+    }
+    const skipExecuteFiles = new Set(failures.map((f) => f.file));
+
+    // with --jobs, render the files themselves (pandoc and postprocessing)
+    // concurrently too
+    if (jobs > 1 && files.length > 1 && !customRenderer) {
+      return await renderFilesConcurrently(
+        files,
+        options,
+        notebookContext,
+        alwaysExecuteFiles,
+        project,
+        tempContext,
+        pandocQuiet,
+        jobs,
+        keepGoing,
+        failures,
+        skipExecuteFiles,
+      );
+    }
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -340,7 +412,17 @@ export async function renderFiles(
           alwaysExecuteFiles,
           pandocQuiet,
           notebookContext,
+          true,
+          skipExecuteFiles.has(file.path),
         );
+      } catch (e) {
+        if (!keepGoing) {
+          throw e;
+        }
+        reportRenderFailure(project, file.path, e);
+        if (!skipExecuteFiles.has(file.path)) {
+          failures.push({ file: file.path, error: e });
+        }
       } finally {
         fileLifetime.cleanup();
       }
@@ -349,6 +431,8 @@ export async function renderFiles(
     if (progress) {
       info("");
     }
+
+    reportRenderFailures(project, failures);
 
     return await pandocRenderer.onComplete(false, options.flags?.quiet);
   } catch (error) {
@@ -370,6 +454,255 @@ export async function renderFiles(
       );
     }
   }
+}
+
+interface RenderFileFailure {
+  file: string;
+  error: unknown;
+}
+
+function reportRenderFailures(
+  project: ProjectContext,
+  failures: RenderFileFailure[],
+) {
+  if (failures.length) {
+    warning(
+      `${failures.length} file(s) failed (rendered without fresh outputs where possible):\n` +
+        failures.map((f) => `  ${relative(project.dir, f.file)}`).join("\n"),
+    );
+  }
+}
+
+// Render files up to `jobs` at a time, each with its own (default) pandoc
+// renderer and lifetime. The first file renders on its own so that shared
+// work (e.g. compiling the theme's sass) is cached before the rest start.
+async function renderFilesConcurrently(
+  files: RenderFile[],
+  options: RenderOptions,
+  notebookContext: NotebookContext,
+  alwaysExecuteFiles: string[] | undefined,
+  project: ProjectContext,
+  tempContext: TempContext,
+  pandocQuiet: boolean,
+  jobs: number,
+  keepGoing: boolean,
+  failures: RenderFileFailure[],
+  skipExecuteFiles: Set<string>,
+): Promise<RenderFilesResult> {
+  const results: RenderedFile[][] = files.map(() => []);
+  const numWidth = String(files.length).length;
+  let firstError: Error | undefined;
+  let done = 0;
+
+  const renderOne = async (i: number) => {
+    const file = files[i];
+    const renderer = defaultPandocRenderer(options, project);
+    const lifetime = new Lifetime();
+    try {
+      await renderFileInternal(
+        lifetime,
+        file,
+        options,
+        project,
+        renderer,
+        files,
+        tempContext,
+        alwaysExecuteFiles,
+        pandocQuiet,
+        notebookContext,
+        true,
+        skipExecuteFiles.has(file.path),
+      );
+      results[i] = (await renderer.onComplete(false, options.flags?.quiet))
+        .files;
+    } catch (e) {
+      results[i] = (await renderer.onComplete(true)).files;
+      if (!keepGoing) {
+        firstError = firstError ||
+          (e instanceof Error ? e : new Error(e ? String(e) : undefined));
+      } else {
+        reportRenderFailure(project, file.path, e);
+        if (!skipExecuteFiles.has(file.path)) {
+          failures.push({ file: file.path, error: e });
+        }
+      }
+    } finally {
+      await lifetime.cleanup();
+    }
+    done++;
+    if (!options.flags?.quiet) {
+      info(
+        `[${String(done).padStart(numWidth)}/${files.length}] ${
+          relative(project.dir, file.path)
+        }`,
+      );
+    }
+  };
+
+  await renderOne(0);
+  let next = 1;
+  const worker = async () => {
+    while (next < files.length && !firstError) {
+      await renderOne(next++);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(jobs, files.length - 1) }, worker),
+  );
+
+  reportRenderFailures(project, failures);
+  return { files: results.flat(), error: firstError };
+}
+
+function reportRenderFailure(
+  project: ProjectContext,
+  file: string,
+  e: unknown,
+) {
+  const msg = e instanceof Error ? (e.message || e.name) : String(e ?? "");
+  error(
+    `Failed to render ${relative(project.dir, file)}${
+      msg ? ": " + msg : ""
+    } (continuing)`,
+  );
+}
+
+// Execute (and freeze) every file that needs execution, up to `jobs` at a
+// time. Returns the files that failed; with keepGoing the rest still run,
+// otherwise the first failure is thrown once the running jobs finish.
+async function executeFilesInParallel(
+  files: RenderFile[],
+  options: RenderOptions,
+  project: ProjectContext,
+  notebookContext: NotebookContext,
+  alwaysExecuteFiles: string[] | undefined,
+  jobs: number,
+  keepGoing: boolean,
+): Promise<RenderFileFailure[]> {
+  // per-cell progress from concurrent kernels would just interleave
+  const execOptions: RenderOptions = {
+    ...options,
+    flags: { ...options.flags, quiet: true },
+  };
+
+  // with keepGoing, files that failed before and haven't changed since are
+  // skipped like frozen ones (rather than failing again on every render)
+  const knownFailures = keepGoing ? readExecuteFailures(project) : {};
+  const failures: RenderFileFailure[] = [];
+  const skippedFailures: string[] = [];
+
+  // only files whose results will be thawed by the render loop are worth
+  // executing here (and only the ones whose frozen results are out of date)
+  const pending: { file: RenderFile; contexts: RenderContext[] }[] = [];
+  for (const file of files) {
+    const contexts = Object.values(
+      await renderContexts(file, execOptions, true, notebookContext, project),
+    ).filter((context) => {
+      const execute = context.format.execute;
+      if (
+        !context.active || !context.engine.canFreeze ||
+        execute[kExecuteEnabled] === false ||
+        !(execute[kFreeze] || options.useFreezer)
+      ) {
+        return false;
+      }
+      if (alwaysExecuteFiles?.includes(file.path)) {
+        return true;
+      }
+      // freeze: auto re-executes when the source changed (freeze: true never)
+      return execute[kFreeze] === "auto" &&
+        !frozenResultIsCurrent(
+          project,
+          context.target.source,
+          outputRecipe(context).output,
+          false,
+        );
+    });
+    if (contexts.length) {
+      const relativePath = relative(project.dir, file.path);
+      if (
+        !alwaysExecuteFiles?.includes(file.path) &&
+        !options.flags?.retryFailed &&
+        knownFailures[relativePath] === sourceFreezeHash(file.path)
+      ) {
+        skippedFailures.push(relativePath);
+        failures.push({
+          file: file.path,
+          error: new Error("execution failed in a previous render"),
+        });
+      } else {
+        pending.push({ file, contexts });
+      }
+    }
+  }
+  if (skippedFailures.length) {
+    warning(
+      `Not executing ${skippedFailures.length} unchanged file(s) that failed in a previous render ` +
+        `(use --retry-failed, edit them, or render them individually, to retry):\n` +
+        skippedFailures.map((f) => `  ${f}`).join("\n"),
+    );
+  }
+  if (pending.length === 0) {
+    return failures;
+  }
+
+  info(`Executing ${pending.length} file(s) with up to ${jobs} jobs...`);
+  const numWidth = String(pending.length).length;
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    while (next < pending.length && (keepGoing || failures.length === 0)) {
+      const { file, contexts } = pending[next++];
+      const start = Date.now();
+      let failed = false;
+      // a failed execution leaves partial figures behind in <stem>_files
+      const filesDir = join(dirname(file.path), inputFilesDir(file.path));
+      const hadFilesDir = existsSync(filesDir);
+      try {
+        for (const context of contexts) {
+          const recipe = outputRecipe(context);
+          await renderExecute(context, recipe.output, {
+            alwaysExecute: alwaysExecuteFiles?.includes(file.path),
+          });
+        }
+      } catch (e) {
+        failed = true;
+        failures.push({ file: file.path, error: e });
+        if (!hadFilesDir && existsSync(filesDir)) {
+          safeRemoveDirSync(filesDir, project.dir);
+        }
+      }
+      done++;
+      const secs = ((Date.now() - start) / 1000).toFixed(1);
+      const line = `[${String(done).padStart(numWidth)}/${pending.length}] ${
+        relative(project.dir, file.path)
+      } (${secs}s)`;
+      if (failed) {
+        error(`${line} FAILED`);
+      } else {
+        info(line);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(jobs, pending.length) }, worker),
+  );
+
+  if (!keepGoing && failures.length) {
+    throw failures[0].error;
+  }
+
+  // remember the failures (and forget files that failed before but now ran)
+  if (keepGoing) {
+    for (const { file } of pending) {
+      delete knownFailures[relative(project.dir, file.path)];
+    }
+    for (const { file } of failures) {
+      knownFailures[relative(project.dir, file)] = sourceFreezeHash(file);
+    }
+    writeExecuteFailures(project, knownFailures);
+  }
+  return failures;
 }
 
 export async function renderFile(
@@ -441,6 +774,7 @@ async function renderFileInternal(
   pandocQuiet: boolean,
   notebookContext: NotebookContext,
   enforceProjectFormats: boolean = true,
+  skipExecute: boolean = false,
 ) {
   const outputs: Array<RenderedFormat> = [];
   let contexts: Record<string, RenderContext> | undefined;
@@ -601,6 +935,7 @@ async function renderFileInternal(
         const executeOptions = mergeConfigs(
           {
             alwaysExecute: alwaysExecuteFiles?.includes(file.path),
+            skipExecute,
           },
           pandocRenderer.onBeforeExecute(recipe.format),
         );

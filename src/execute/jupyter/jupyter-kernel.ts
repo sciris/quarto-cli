@@ -186,6 +186,7 @@ async function execJupyter(
           quarto.path.resource("jupyter", "jupyter.py"),
         ],
         env: {
+          ...(options.executeEnv as Record<string, string> | undefined),
           // Force default matplotlib backend. something simillar is done here:
           // https://github.com/ipython/ipykernel/blob/d7339c2c70115bbe6042880d29eeb273b5a2e350/ipykernel/kernelapp.py#L549-L554
           // however this respects existing environment variables, which we've seen in at least

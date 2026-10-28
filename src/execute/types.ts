@@ -160,6 +160,9 @@ export interface ExecuteOptions {
   previewServer?: boolean;
   handledLanguages: string[]; // list of languages handled by cell language handlers, after the execution engine
   project: ProjectContext;
+  // per-document environment set by setExecuteEnvironment (engines that spawn
+  // processes pass it explicitly, since Deno.env is shared by concurrent renders)
+  executeEnv?: Record<string, string>;
 }
 
 // result of execution

@@ -299,6 +299,63 @@ export function freezeResultFile(
   return join(freezeDir, extname(output).slice(1) + ".json");
 }
 
+// does the project freezer hold results for this input that match its current
+// source (i.e. would a freeze: auto render thaw rather than execute)?
+export function frozenResultIsCurrent(
+  project: ProjectContext,
+  source: string,
+  output: string,
+  hidden: boolean,
+) {
+  const resultFile = freezeResultFile(source, output);
+  const filesDir = relative(project.dir, dirname(dirname(resultFile)));
+  const frozenFile = join(
+    projectFreezerDir(project.dir, hidden),
+    asFreezerDir(filesDir),
+    kFreezeExecuteResults,
+    basename(resultFile),
+  );
+  try {
+    const { hash } = JSON.parse(Deno.readTextFileSync(frozenFile)) as {
+      hash: string;
+    };
+    return hash === freezeInputHash(source);
+  } catch {
+    return false;
+  }
+}
+
+// Files whose execution failed in a --keep-going render, with the source hash
+// they failed at: like frozen results, they aren't executed again until their
+// source changes
+const kExecuteFailuresFile = "execute-failures.json";
+
+export function readExecuteFailures(project: ProjectContext) {
+  try {
+    return JSON.parse(
+      Deno.readTextFileSync(
+        projectScratchPath(project.dir, kExecuteFailuresFile),
+      ),
+    ) as Record<string, string>;
+  } catch {
+    return {} as Record<string, string>;
+  }
+}
+
+export function writeExecuteFailures(
+  project: ProjectContext,
+  failures: Record<string, string>,
+) {
+  Deno.writeTextFileSync(
+    projectScratchPath(project.dir, kExecuteFailuresFile),
+    JSON.stringify(failures, undefined, 2),
+  );
+}
+
+export function sourceFreezeHash(source: string) {
+  return freezeInputHash(source);
+}
+
 export function removeFreezeResults(filesDir: string) {
   const freezeDir = join(filesDir, kFreezeExecuteResults);
   removeIfExists(freezeDir);
