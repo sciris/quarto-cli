@@ -73,6 +73,7 @@ import {
   kError,
   kEval,
   kExecuteDaemon,
+  kExecutePreload,
   kExecuteDaemonRestart,
   kExecuteDebug,
   kExecuteEnabled,
@@ -551,6 +552,7 @@ export interface FormatExecute {
   [kExecuteEnabled]?: true | false | null;
   [kExecuteIpynb]?: true | false | null;
   [kExecuteDaemon]?: number | boolean | null;
+  [kExecutePreload]?: string[];
   [kExecuteDaemonRestart]?: boolean;
   [kExecuteDebug]?: boolean;
   [kEngine]?: string;

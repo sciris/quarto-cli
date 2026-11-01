@@ -8,6 +8,7 @@ import { existsSync, safeRemoveSync } from "../../deno_ral/fs.ts";
 import { join } from "../../deno_ral/path.ts";
 import { error, info, warning } from "../../deno_ral/log.ts";
 
+import { asArray } from "../../core/array.ts";
 import { sleep } from "../../core/async.ts";
 import {
   JupyterCapabilities,
@@ -20,6 +21,7 @@ import {
   kExecuteDaemon,
   kExecuteDaemonRestart,
   kExecuteDebug,
+  kExecutePreload,
 } from "../../config/constants.ts";
 
 import { ExecuteOptions } from "../types.ts";
@@ -78,60 +80,7 @@ export async function executeKernelKeepalive(
   const [conn, transport] = await connectToKernel(options);
   trace(options, "Kernel connection successful");
   try {
-    trace(options, "Sending execute command to kernel");
-    await writeKernelCommand(
-      conn,
-      "execute",
-      transport.secret,
-      { ...options },
-    );
-    trace(options, "Execute command sent, reading response");
-    let leftover = "";
-    while (true) {
-      const buffer = new Uint8Array(512);
-
-      const bytesRead = await conn.read(buffer);
-      if (bytesRead === null) {
-        break;
-      }
-
-      if (bytesRead > 0) {
-        const payload = new TextDecoder().decode(
-          buffer.slice(0, bytesRead),
-        );
-
-        const jsonMessages = payload.split("\n");
-
-        for (let jsonMessage of jsonMessages) {
-          if (!jsonMessage) {
-            continue;
-          }
-          if (leftover) {
-            jsonMessage = leftover + jsonMessage;
-            leftover = "";
-          }
-          try {
-            const msg: { type: string; data: string } = JSON.parse(
-              jsonMessage,
-            );
-            if (msg.type === "error") {
-              trace(options, "Error response received");
-              error(msg.data, { colorize: false });
-              printExecDiagnostics(options.kernelspec, msg.data);
-              return Promise.reject();
-            } else if (msg.type == "restart") {
-              trace(options, "Restart request received");
-              return executeKernelKeepalive(options);
-            } else {
-              info(msg.data, { newline: false });
-            }
-          } catch {
-            leftover = jsonMessage;
-          }
-        }
-      }
-    }
-    trace(options, "Server request complete\n\n");
+    await executeOnServer(conn, transport, options);
   } catch (e) {
     trace(options, "Error occurred receiving response from server");
     // likely this is not our server! (as it's not producing/consuming the expected json)
@@ -146,6 +95,122 @@ export async function executeKernelKeepalive(
 
     serverLogProcess?.kill("SIGKILL");
   }
+}
+
+// One server for each python and preload list, for the rest of this render
+const preforkServers = new Map<string, Promise<KernelTransport>>();
+
+// Execute a notebook in a fork of a process that has already imported what it
+// needs (see prefork.py)
+export async function executeKernelPrefork(
+  options: JupyterExecuteOptions,
+): Promise<void> {
+  const preload = asArray(options.format.execute[kExecutePreload]);
+  const key = JSON.stringify([options.python_cmd, preload]);
+  if (!preforkServers.has(key)) {
+    preforkServers.set(key, startPreforkServer(options, key, preload));
+  }
+  const transport = await preforkServers.get(key)!;
+  const [conn] = await denoConnectToKernel(transport);
+  try {
+    await executeOnServer(conn, transport, options);
+  } finally {
+    conn.close();
+  }
+}
+
+async function startPreforkServer(
+  options: JupyterExecuteOptions,
+  key: string,
+  preload: string[],
+): Promise<KernelTransport> {
+  const quarto = getQuartoAPI();
+  const transportFile = join(
+    quarto.path.runtime("jt"),
+    `prefork-${Deno.pid}-${quarto.crypto.md5Hash(key).slice(0, 20)}`,
+  );
+  const result = await execJupyter("start", {
+    transport: transportFile,
+    type: "tcp",
+    prefork: true,
+    parent_pid: Deno.pid,
+    preload,
+    debug: !!Deno.env.get("QUARTO_JUPYTER_DEBUG"),
+  }, options.kernelspec);
+  if (!result.success) {
+    throw new Error("Unable to start Jupyter server");
+  }
+  for (let i = 1; i < 20; i++) {
+    await sleep(i * 100);
+    const transport = readKernelTransportFile(transportFile, "tcp");
+    if (transport) {
+      safeRemoveSync(transportFile);
+      return transport;
+    }
+  }
+  throw new Error("Unable to start Jupyter server");
+}
+
+// Send an execute command to a server, showing what it sends back
+async function executeOnServer(
+  conn: Deno.Conn,
+  transport: KernelTransport,
+  options: JupyterExecuteOptions,
+): Promise<void> {
+  trace(options, "Sending execute command to kernel");
+  await writeKernelCommand(
+    conn,
+    "execute",
+    transport.secret,
+    { ...options },
+  );
+  trace(options, "Execute command sent, reading response");
+  let leftover = "";
+  while (true) {
+    const buffer = new Uint8Array(512);
+
+    const bytesRead = await conn.read(buffer);
+    if (bytesRead === null) {
+      break;
+    }
+
+    if (bytesRead > 0) {
+      const payload = new TextDecoder().decode(
+        buffer.slice(0, bytesRead),
+      );
+
+      const jsonMessages = payload.split("\n");
+
+      for (let jsonMessage of jsonMessages) {
+        if (!jsonMessage) {
+          continue;
+        }
+        if (leftover) {
+          jsonMessage = leftover + jsonMessage;
+          leftover = "";
+        }
+        try {
+          const msg: { type: string; data: string } = JSON.parse(
+            jsonMessage,
+          );
+          if (msg.type === "error") {
+            trace(options, "Error response received");
+            error(msg.data, { colorize: false });
+            printExecDiagnostics(options.kernelspec, msg.data);
+            return Promise.reject();
+          } else if (msg.type == "restart") {
+            trace(options, "Restart request received");
+            return executeKernelKeepalive(options);
+          } else {
+            info(msg.data, { newline: false });
+          }
+        } catch {
+          leftover = jsonMessage;
+        }
+      }
+    }
+  }
+  trace(options, "Server request complete\n\n");
 }
 
 async function abortKernel(options: JupyterExecuteOptions) {

@@ -70,6 +70,7 @@ export const kUnrollMarkdownCells = "unroll-markdown-cells";
 export const kExecuteEnabled = "enabled";
 export const kExecuteIpynb = "ipynb";
 export const kExecuteDaemon = "daemon";
+export const kExecutePreload = "preload";
 export const kExecuteDaemonRestart = "daemon-restart";
 export const kExecuteDebug = "debug";
 
@@ -185,6 +186,7 @@ export const kExecuteDefaultsKeys = [
   kExecuteEnabled,
   kExecuteIpynb,
   kExecuteDaemon,
+  kExecutePreload,
   kExecuteDaemonRestart,
   kExecuteDebug,
   kIpynbFilter,

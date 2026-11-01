@@ -125,6 +125,16 @@
       By default a daemon with a timeout of 300 seconds will be used. Set `daemon`
       to another timeout value or to `false` to disable it altogether.
 
+- name: preload
+  tags:
+    engine: jupyter
+  schema:
+    maybeArrayOf: string
+  description: |
+    Python modules to import once for a `quarto render --jobs` run, in the process that each
+    notebook's kernel is forked from. Use this for a slow import that most notebooks share, as long
+    as importing it starts no threads that it relies on later.
+
 - name: daemon-restart
   schema: boolean
   hidden: true

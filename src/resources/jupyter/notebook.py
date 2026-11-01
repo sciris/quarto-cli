@@ -16,6 +16,11 @@ from yaml import safe_load as parse_string
 from yaml import safe_dump
 
 from log import trace
+
+# jsonschema uses this to check a format that notebooks don't have, if it's
+# installed, and it takes most of a second to import
+sys.modules.setdefault("rfc3987_syntax", None)
+
 import nbformat
 from nbclient import NotebookClient
 from jupyter_client import KernelManager

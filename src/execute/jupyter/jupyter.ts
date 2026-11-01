@@ -9,6 +9,7 @@ import { satisfies } from "semver/mod.ts";
 
 import { existsSync, safeRemoveSync } from "../../deno_ral/fs.ts";
 
+import { isWindows } from "../../deno_ral/platform.ts";
 import { error, info } from "../../deno_ral/log.ts";
 
 import * as ld from "../../core/lodash.ts";
@@ -35,6 +36,7 @@ import { Format } from "../../config/types.ts";
 import {
   executeKernelKeepalive,
   executeKernelOneshot,
+  executeKernelPrefork,
   JupyterExecuteOptions,
 } from "./jupyter-kernel.ts";
 import {
@@ -487,7 +489,12 @@ title: "Title"
             supervisor_pid: options.previewServer ? Deno.pid : undefined,
             ...execOptions,
           };
-          if (executeDaemon === false || executeDaemon === 0) {
+          if (
+            options.parallel && !isWindows &&
+            kernelspec.language.toLowerCase() === "python"
+          ) {
+            await executeKernelPrefork(jupyterExecOptions);
+          } else if (executeDaemon === false || executeDaemon === 0) {
             await executeKernelOneshot(jupyterExecOptions);
           } else {
             await executeKernelKeepalive(jupyterExecOptions);

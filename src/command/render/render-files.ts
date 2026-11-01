@@ -252,6 +252,7 @@ export async function renderExecute(
     params: resolveParams(flags.params, flags.paramsFile),
     quiet: flags.quiet,
     previewServer: context.options.previewServer,
+    parallel: (flags.jobs || 1) > 1 && !context.options.previewServer,
     handledLanguages: languages(),
     project: context.project,
   };
@@ -355,6 +356,7 @@ export async function renderFiles(
     // results go to the freezer, so the render loop below just thaws them
     const jobs = options.flags?.jobs || 1;
     if (jobs > 1 && files.length > 1 && !project.isSingleFile) {
+      const executed = new Set<string>();
       failures.push(
         ...await executeFilesInParallel(
           files,
@@ -364,8 +366,10 @@ export async function renderFiles(
           alwaysExecuteFiles,
           jobs,
           keepGoing,
+          executed,
         ),
       );
+      alwaysExecuteFiles = alwaysExecuteFiles?.filter((f) => !executed.has(f));
     }
     const skipExecuteFiles = new Set(failures.map((f) => f.file));
 
@@ -578,6 +582,7 @@ async function executeFilesInParallel(
   alwaysExecuteFiles: string[] | undefined,
   jobs: number,
   keepGoing: boolean,
+  executed: Set<string>,
 ): Promise<RenderFileFailure[]> {
   // per-cell progress from concurrent kernels would just interleave
   const execOptions: RenderOptions = {
@@ -665,6 +670,7 @@ async function executeFilesInParallel(
             alwaysExecute: alwaysExecuteFiles?.includes(file.path),
           });
         }
+        executed.add(file.path);
       } catch (e) {
         failed = true;
         failures.push({ file: file.path, error: e });

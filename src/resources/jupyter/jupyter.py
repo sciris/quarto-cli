@@ -272,7 +272,12 @@ if __name__ == "__main__":
         # serve a notebook (invoked by run_server_subprocess)
         elif command == "serve":
             trace("running notebook server subprocess")
-            run_server(options)
+            if options.get("prefork"):
+                from prefork import run_prefork_server
+
+                run_prefork_server(options)
+            else:
+                run_server(options)
 
         # execute a notebook and then quit
         elif command == "execute":
