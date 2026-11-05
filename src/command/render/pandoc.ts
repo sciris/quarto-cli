@@ -343,6 +343,8 @@ export async function runPandoc(
     pandocEnv["QUARTO_FILTER_PARAMS"] = encodeBase64(
       JSON.stringify(paramsJson),
     );
+    // Per run, not Deno.env: with --jobs, pages render concurrently and a global would be overwritten by another page
+    pandocEnv["QUARTO_FILTER_DEPENDENCY_FILE"] = dependenciesFile;
 
     const traceFilters =
       // deno-lint-ignore no-explicit-any
@@ -1037,7 +1039,6 @@ export async function runPandoc(
     allDefaults,
     formatFilterParams,
     filterResultsFile,
-    dependenciesFile,
   );
 
   setupPandocHooks(

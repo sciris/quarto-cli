@@ -131,7 +131,6 @@ export async function filterParamsJson(
   defaults: FormatPandoc | undefined,
   filterParams: Record<string, unknown>,
   resultsFile: string,
-  dependenciesFile: string,
 ): Promise<Record<string, unknown>> {
   // extract include params (possibly mutating it's arguments)
   const includes = options.format.render[kMergeIncludes] !== false
@@ -169,7 +168,7 @@ export async function filterParamsJson(
 
   const params: Metadata = {
     ...includes,
-    ...initFilterParams(dependenciesFile),
+    ...initFilterParams(),
     ...ipynbFilterParams(options),
     ...await projectFilterParams(options),
     ...quartoColumnParams,
@@ -704,7 +703,7 @@ async function extensionShortcodes(options: PandocOptions) {
   return extensionShortcodes;
 }
 
-function initFilterParams(dependenciesFile: string) {
+function initFilterParams() {
   const params: Metadata = {};
   if (isWindows) {
     const value = readCodePage();
@@ -713,7 +712,6 @@ function initFilterParams(dependenciesFile: string) {
       Deno.env.set("QUARTO_WIN_CODEPAGE", value);
     }
   }
-  Deno.env.set("QUARTO_FILTER_DEPENDENCY_FILE", dependenciesFile);
   return params;
 }
 
