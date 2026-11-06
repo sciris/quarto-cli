@@ -1,0 +1,24 @@
+# Install Sciris's Quarto from the prebuilt tarball that .github/workflows/sciris-release.yml publishes. Usage:
+#
+#   - uses: sciris/quarto-cli/.github/actions/setup@main
+
+name: Set up Sciris Quarto
+description: Install the prebuilt Linux amd64 Quarto from sciris/quarto-cli
+inputs:
+  tag:
+    description: The release to install from
+    default: sciris-dev
+runs:
+  using: composite
+  steps:
+    - name: Download and unpack Quarto
+      shell: bash
+      run: |
+        dir="$RUNNER_TOOL_CACHE/sciris-quarto"
+        mkdir -p "$dir"
+        curl -fsSL "https://github.com/sciris/quarto-cli/releases/download/${{ inputs.tag }}/quarto-linux-amd64.tar.gz" \
+          | tar -xz -C "$dir" --strip-components=1
+        echo "$dir/bin" >> "$GITHUB_PATH"
+    - name: Show the version
+      shell: bash
+      run: quarto --version

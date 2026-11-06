@@ -1,0 +1,50 @@
+# Build a Linux amd64 Quarto tarball from this fork and publish it as a rolling release, so CI elsewhere can install the
+# fork in seconds with `uses: sciris/quarto-cli/.github/actions/setup@main` instead of building it from source.
+name: Sciris release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sciris-release
+  cancel-in-progress: true
+
+env:
+  TAG: sciris-dev
+  TARBALL: quarto-linux-amd64.tar.gz
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the version
+        id: version
+        run: echo "version=$(cat version.txt)-sciris" >> "$GITHUB_OUTPUT"
+
+      - name: Build the tarball
+        uses: ./.github/actions/build-dist-tarball
+        with:
+          version: ${{ steps.version.outputs.version }}
+          arch: amd64
+          tarball-name: ${{ env.TARBALL }}
+          artifact-name: quarto-linux-amd64
+          retention-days: 7
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Quarto ${{ steps.version.outputs.version }} built from sciris/quarto-cli@${GITHUB_SHA::9}. Replaced on every push to main."
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes "$notes" --target "$GITHUB_SHA"
+          else
+            gh release create "$TAG" --prerelease --title "Sciris Quarto (rolling)" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+          gh release upload "$TAG" "package/$TARBALL" --clobber
