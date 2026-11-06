@@ -24,9 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Patch version 99 marks the fork's builds (1.12.1 becomes 1.12.99). It has to stay a plain version: a suffix
+      # like 1.12.1-sciris is a semver pre-release, which fails extensions' `quarto-required` checks.
       - name: Read the version
         id: version
-        run: echo "version=$(cat version.txt)-sciris" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(cut -d. -f1,2 version.txt).99" >> "$GITHUB_OUTPUT"
 
       - name: Build the tarball
         uses: ./.github/actions/build-dist-tarball
@@ -36,6 +38,20 @@ jobs:
           tarball-name: ${{ env.TARBALL }}
           artifact-name: quarto-linux-amd64
           retention-days: 7
+
+      # Install the tarball the way the setup action does, and use it like the docs repos do, before replacing the release
+      - name: Smoke-test the tarball
+        run: |
+          dir="$RUNNER_TEMP/quarto"
+          mkdir -p "$dir" "$RUNNER_TEMP/smoke"
+          tar -xzf "package/$TARBALL" -C "$dir" --strip-components=1
+          export PATH="$dir/bin:$PATH"
+          test "$(quarto --version)" = "${{ steps.version.outputs.version }}"
+          cd "$RUNNER_TEMP/smoke"
+          quarto add sciris/quartopydoc --no-prompt
+          printf -- '---\ntitle: Smoke test\n---\n\nHello $x^2$\n' > smoke.qmd
+          quarto render smoke.qmd
+          test -s smoke.html
 
       - name: Publish the release
         env:
