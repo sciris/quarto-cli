@@ -94,15 +94,10 @@ listingTypes.forEach(
         const violations = await browserPage.evaluate(async (selector) => {
           const axe = (window as any).axe;
           const container = document.querySelector(selector)!;
-          // A description containing a link splits the item's wrapping <a>,
-          // leaving empty links that fail link-name; a separate bug.
-          const emptyWrappers = Array.from(
-            container.querySelectorAll("a"),
-          ).filter((a) => a.children.length === 0 && a.textContent!.trim() === "");
           // heading-order judges the listing heading levels against the
           // page, which this test does not cover.
           const result = await axe.run(
-            { include: [container], exclude: emptyWrappers },
+            { include: [container] },
             { rules: { "heading-order": { enabled: false } } },
           );
           return result.violations.map(
@@ -127,24 +122,6 @@ listingTypes.forEach(
             await browserPage.evaluate(afterContent(itemAnchorSelector)),
           ).toBe("none");
         });
-
-        test("description link keeps its external icon", async ({ page: browserPage }) => {
-          await browserPage.goto(`./listings/external-links/_site/${page}`);
-          await browserPage.waitForSelector(containerSelector);
-
-          const descriptionLink = browserPage
-            .locator(containerSelector)
-            .locator('a[href="https://example.org/docs"]');
-
-          await expect(descriptionLink).toHaveClass(/external/);
-          const content = await browserPage.evaluate(
-            afterContent(
-              `${containerSelector} a[href="https://example.org/docs"]`,
-            ),
-          );
-          expect(content).not.toBe("none");
-          expect(content).not.toBe("missing");
-        });
       }
     });
   },
@@ -160,6 +137,28 @@ test.describe("External links without link-external-newwindow", () => {
     await expect(link).not.toHaveAttribute("target");
     await expect(link).not.toHaveAttribute("aria-describedby");
     await expect(browserPage.locator(`#${newWindowNoteId}`)).toHaveCount(0);
+  });
+});
+
+test.describe("Explicit target with link-external-newwindow", () => {
+  test("explicit target survives newwindow", async ({ page: browserPage }) => {
+    await browserPage.goto("./listings/external-links/_site/self-target.html");
+    await browserPage.waitForSelector(".quarto-listing-default");
+
+    const link = browserPage.locator(
+      '.quarto-listing-default .listing-title a[href="https://example.com/self"]',
+    );
+    await expect(link).toHaveAttribute("target", "_self");
+    await expect(link).not.toHaveAttribute("rel");
+    await expect(link).not.toHaveAttribute("aria-describedby");
+  });
+
+  test("explicit _blank link still gets rel=noopener", async ({ page: browserPage }) => {
+    await browserPage.goto("./listings/external-links/_site/self-target.html");
+
+    const link = browserPage.locator('main a[href="https://example.com/explicit-blank"]');
+    await expect(link).toHaveAttribute("target", "_blank");
+    await expect(link).toHaveAttribute("rel", "noopener");
   });
 });
 
@@ -183,18 +182,19 @@ test.describe("External links shown after listing updates", () => {
       browserPage.locator("#custom-icon-listing-pagination .page.page-link", {
         hasText: n,
       });
-    const descriptionLink = browserPage.locator(
-      '.quarto-listing-default a[href="https://example.org/docs"]',
+    // Table listing titles are the only item links that keep the icon.
+    const titleLink = browserPage.locator(
+      '.quarto-listing-table a.listing-title[href="https://example.com/external-article"]',
     );
 
     for (const n of ["2", "1", "2", "1", "2"]) {
       await pageLink(n).click();
     }
-    await expect(descriptionLink).toBeVisible();
+    await expect(titleLink).toBeVisible();
     // The icon is inserted as the next sibling of the link it decorates.
-    await expect(descriptionLink.locator("xpath=following-sibling::i[contains(@class, 'quarto-ext-icon')]"))
+    await expect(titleLink.locator("xpath=following-sibling::i[contains(@class, 'quarto-ext-icon')]"))
       .toHaveCount(1);
-    await expect(descriptionLink).toHaveAttribute("aria-describedby", newWindowNoteId);
+    await expect(titleLink).toHaveAttribute("aria-describedby", newWindowNoteId);
   });
 });
 

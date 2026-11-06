@@ -12,7 +12,8 @@ import { unitTest } from "../../test.ts";
 import { assert, assertEquals, assertRejects, assertThrows } from "../../asserts.ts";
 import { join, resolve } from "../../../src/deno_ral/path.ts";
 import { quartoDevBinCmd } from "../../quarto-cmd.ts";
-import { ensureDirSync, safeRemoveSync } from "../../../src/deno_ral/fs.ts";
+import { safeRemoveSync } from "../../../src/deno_ral/fs.ts";
+import { writeFixture } from "../../utils.ts";
 import { execProcess } from "../../../src/core/process.ts";
 import { createTempContext } from "../../../src/core/temp.ts";
 import {
@@ -42,12 +43,6 @@ import {
 const DENO = ["De", "no"].join("") + ".";
 const FROM = ["fr", "om"].join("");
 const IMPORT = ["im", "port"].join("");
-
-function writeFixture(root: string, rel: string, contents: string) {
-  const parts = rel.split("/");
-  ensureDirSync(join(root, ...parts.slice(0, -1)));
-  Deno.writeTextFileSync(join(root, ...parts), contents);
-}
 
 function makeRepo(root: string) {
   writeFixture(root, "src/quarto.ts", "export {};\n");
@@ -296,6 +291,36 @@ unitTest("check-runtime-boundary - countText keys Deno APIs by one or two identi
 // deno-lint-ignore require-await
 unitTest("check-runtime-boundary - countText never swallows a following prefix", async () => {
   assertEquals(countText(DENO + DENO + "build.os").deno, { [DENO + "build"]: 1, "build.os": 1 });
+});
+
+const DENO_ID = DENO.slice(0, -1);
+
+// deno-lint-ignore require-await
+unitTest("check-runtime-boundary - countText counts optional-chaining, bracket and globalThis access", async () => {
+  const text = [
+    `${DENO_ID}?.errors`,
+    `${DENO_ID}?.errors?.NotFound`,
+    `globalThis.${DENO_ID}?.build.os`,
+    `(globalThis as any).${DENO_ID}?.errors`,
+    `(globalThis as any)["${DENO_ID}"]?.errors`,
+    `globalThis['${DENO_ID}']`,
+    `${DENO_ID} = globalThis.${DENO_ID};`,
+    `globalThis.${DENO_ID}.cwd()`,
+  ].join("\n");
+  assertEquals(countText(text).deno, { errors: 3, "errors.NotFound": 1, "build.os": 1, "": 2, cwd: 1 });
+});
+
+// deno-lint-ignore require-await
+unitTest("check-runtime-boundary - countText ignores the name outside an access", async () => {
+  const text = [
+    `typeof ${DENO_ID} === "undefined"`,
+    `const s = "${DENO_ID}";`,
+    `${DENO_ID}Kv.open()`,
+    `my${DENO_ID}.x`,
+    `const names = ["${DENO_ID}"];`,
+    `obj["${DENO_ID}"].x`,
+  ].join("\n");
+  assertEquals(countText(text).deno, {});
 });
 
 // deno-lint-ignore require-await
