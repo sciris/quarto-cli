@@ -1,0 +1,21 @@
+---
+title: "Python calls and keyword arguments are highlighted"
+format: html
+_quarto:
+  tests:
+    html:
+      ensureFileRegexMatches:
+        -
+          # A function call, a method call, and a keyword argument
+          - '<span class="fu">Sim</span>'
+          - '<span class="fu">run</span>'
+          - '<span class="va">n_agents</span>'
+        -
+          # An assignment is not a keyword argument
+          - '<span class="va">sim</span>'
+---
+
+```python
+sim = ss.Sim(n_agents=1000)
+sim.run()
+```
