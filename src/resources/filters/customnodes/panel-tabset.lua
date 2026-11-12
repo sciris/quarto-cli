@@ -261,6 +261,11 @@ _quarto.ast.add_handler({
       return render_tabset(node.attr, tabs, bootstrapTabs())
     elseif _quarto.format.isHtmlOutput() then
       return render_tabset(node.attr, tabs, tabbyTabs())
+    elseif _quarto.format.isIpynbOutput() then
+      -- A notebook has no tabs, and its writer makes code cells only of top-level cells, so the tabs'
+      -- contents go at the top level (not in a Div), each under its tab's title in bold (a heading
+      -- would add a section to the notebook's outline for each tab)
+      return render_tabset_with_labels(tabs)
     elseif _quarto.format.isLatexOutput() or _quarto.format.isDocxOutput() or _quarto.format.isEpubOutput() or _quarto.format.isJatsOutput() then
       return pandoc.Div(render_tabset_with_l4_headings(tabs), node.attr)
     else
@@ -332,6 +337,18 @@ local function min(a, b)
   else
     return b
   end
+end
+
+function render_tabset_with_labels(tabs)
+  local result = pandoc.Blocks{}
+  for i=1,#tabs do
+    local tab = tabs[i]
+    local heading = tab.content[1]
+    tab.content:remove(1)
+    result:insert(pandoc.Para{pandoc.Strong(heading.content)})
+    result:extend(tab.content)
+  end
+  return result
 end
 
 function render_tabset_with_l4_headings(tabs)

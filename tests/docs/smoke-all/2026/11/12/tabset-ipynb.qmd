@@ -1,0 +1,36 @@
+---
+title: "Code inside a tabset becomes notebook code cells"
+format:
+  ipynb:
+    execute:
+      enabled: false
+_quarto:
+  tests:
+    ipynb:
+      ensureIpynbCellMatches:
+        cellType: code
+        matches:
+          - 'print\("first tab"\)'
+          - 'print\("second tab"\)'
+          - 'print\("outside"\)'
+        noMatches:
+          - 'First'
+---
+
+```{python}
+print("outside")
+```
+
+::: {.panel-tabset}
+## First
+
+```{python}
+print("first tab")
+```
+
+## Second
+
+```{python}
+print("second tab")
+```
+:::
